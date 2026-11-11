@@ -18,12 +18,16 @@ commands:
   test-boot             boot with QEMU's PVH loader and check the boot log
   test-xen              boot Xen under QEMU with the kernel as PVH dom0 and
                         check the boot log
+  iso                   build out/rustbox.iso: GRUB -> Xen -> kernel as dom0,
+                        bootable in any VM (needs grub-mkrescue, xorriso, mtools)
+  test-iso              build the ISO, boot it under QEMU, check the boot log
+  run-iso               build the ISO and boot it in a QEMU window
 
 options:
   --release             use the release profile
-  --xen <path>          uncompressed Xen multiboot image for test-xen
-                        (default: $RBX_XEN, see scripts/fetch-xen.sh)
-  --timeout <seconds>   boot test timeout (default 60, test-xen 180)
+  --xen <path>          Xen multiboot image (default: $RBX_XEN, see
+                        scripts/fetch-xen.sh); test-xen needs it uncompressed
+  --timeout <seconds>   boot test timeout (default 60; test-xen, test-iso 240)
 ";
 
 /// Must match `BOOT_OK` in kernel/src/main.rs.
@@ -64,6 +68,15 @@ fn main() -> ExitCode {
         "run" => build_kernel(opts.release).and_then(|k| run_interactive(&k)),
         "test-boot" => build_kernel(opts.release).and_then(|k| test_boot(&k, &opts)),
         "test-xen" => build_kernel(opts.release).and_then(|k| test_xen(&k, &opts)),
+        "iso" => build_kernel(opts.release)
+            .and_then(|k| build_iso(&k, &opts))
+            .map(|iso| println!("{}", iso.display())),
+        "test-iso" => build_kernel(opts.release)
+            .and_then(|k| build_iso(&k, &opts))
+            .and_then(|iso| test_iso(&iso, &opts)),
+        "run-iso" => build_kernel(opts.release)
+            .and_then(|k| build_iso(&k, &opts))
+            .and_then(|iso| run_iso(&iso)),
         "help" | "--help" | "-h" => {
             print!("{USAGE}");
             Ok(())
@@ -148,7 +161,22 @@ fn test_boot(kernel: &Path, opts: &Opts) -> Result<(), String> {
     Ok(())
 }
 
-fn test_xen(kernel: &Path, opts: &Opts) -> Result<(), String> {
+/// Xen options shared by every way we boot it: a PVH dom0, everything
+/// logged to the serial port, and no reboot when dom0 stops so the log stays
+/// readable.
+const XEN_CMDLINE: &str =
+    "dom0=pvh dom0_mem=256M com1=115200,8n1 loglvl=all guest_loglvl=all noreboot";
+
+const XEN_BOOT_LOG: &[&str] = &[
+    "Building a PVH Dom0",
+    "hypervisor: Xen ",
+    "role: dom0",
+    "memory map (XENMEM_memory_map",
+    "traps: IDT live",
+    "frames: allocator ok",
+];
+
+fn xen_image(opts: &Opts) -> Result<&Path, String> {
     let xen = opts
         .xen
         .as_deref()
@@ -156,6 +184,30 @@ fn test_xen(kernel: &Path, opts: &Opts) -> Result<(), String> {
     if !xen.is_file() {
         return Err(format!("Xen image {} does not exist", xen.display()));
     }
+    Ok(xen)
+}
+
+/// The virtual machine Xen needs when QEMU emulates the CPU in software.
+///
+/// TCG can emulate AMD SVM, which Xen needs for a PVH dom0. Nested paging is
+/// switched off because QEMU's TCG NPT emulation does not hold up under Xen;
+/// Xen then uses shadow paging. A PVH dom0 also requires an IOMMU, hence the
+/// emulated AMD-Vi on q35.
+fn xen_machine(cmd: &mut Command) {
+    cmd.args([
+        "-machine",
+        "q35",
+        "-cpu",
+        "max,-npt",
+        "-m",
+        "1G",
+        "-device",
+        "amd-iommu",
+    ]);
+}
+
+fn test_xen(kernel: &Path, opts: &Opts) -> Result<(), String> {
+    let xen = xen_image(opts)?;
     if xen.extension().is_some_and(|e| e == "gz") {
         return Err(format!(
             "{} is compressed; QEMU's multiboot loader needs it gunzipped",
@@ -168,45 +220,110 @@ fn test_xen(kernel: &Path, opts: &Opts) -> Result<(), String> {
     }
 
     let mut cmd = qemu();
-    // TCG can emulate AMD SVM, which Xen needs for a PVH dom0. Nested paging
-    // is switched off because QEMU's TCG NPT emulation does not hold up
-    // under Xen; Xen then uses shadow paging. A PVH dom0 also requires an
-    // IOMMU, hence the emulated AMD-Vi on q35.
-    cmd.args([
-        "-machine",
-        "q35",
-        "-cpu",
-        "max,-npt",
-        "-m",
-        "1G",
-        "-device",
-        "amd-iommu",
-    ]);
+    xen_machine(&mut cmd);
     cmd.arg("-kernel").arg(xen);
-    cmd.args([
-        "-append",
-        "dom0=pvh dom0_mem=256M console=com1 com1=115200,8n1 loglvl=all guest_loglvl=all noreboot",
-    ]);
+    cmd.arg("-append")
+        .arg(format!("{XEN_CMDLINE} console=com1"));
     // Multiboot module 0 is the dom0 kernel; text after the path is its
     // command line.
     cmd.arg("-initrd")
         .arg(format!("{kernel} rbx.test=xen-dom0"));
 
-    let log = boot_and_wait(cmd, Duration::from_secs(opts.timeout.unwrap_or(180)))?;
-    expect(
-        &log,
-        &[
-            "Building a PVH Dom0",
-            "hypervisor: Xen ",
-            "role: dom0",
-            "cmdline: rbx.test=xen-dom0",
-            "memory map (XENMEM_memory_map",
-            "traps: IDT live",
-            "frames: allocator ok",
-        ],
-    )?;
+    let log = boot_and_wait(cmd, Duration::from_secs(opts.timeout.unwrap_or(240)))?;
+    expect(&log, XEN_BOOT_LOG)?;
+    expect(&log, &["cmdline: rbx.test=xen-dom0"])?;
     println!("test-xen: ok");
     Ok(())
+}
+
+/// Builds `out/rustbox.iso`: GRUB loads Xen, which starts the kernel as
+/// dom0. Unlike `test-xen` this goes through a real boot loader, so the
+/// image also boots outside QEMU.
+fn build_iso(kernel: &Path, opts: &Opts) -> Result<PathBuf, String> {
+    let xen = xen_image(opts)?;
+    let out = repo_root().join("out");
+    let staging = out.join("iso-root");
+    let boot = staging.join("boot");
+    let io = |what: &str, e: std::io::Error| format!("{what}: {e}");
+
+    // Start from an empty tree so nothing stale ends up in the image.
+    if staging.exists() {
+        std::fs::remove_dir_all(&staging).map_err(|e| io("clearing out/iso-root", e))?;
+    }
+    std::fs::create_dir_all(boot.join("grub")).map_err(|e| io("creating out/iso-root", e))?;
+    // GRUB decompresses gzip transparently, so either form of Xen works.
+    std::fs::copy(xen, boot.join("xen")).map_err(|e| io("copying Xen", e))?;
+    std::fs::copy(kernel, boot.join("rustbox-kernel")).map_err(|e| io("copying the kernel", e))?;
+    std::fs::write(boot.join("grub/grub.cfg"), grub_cfg())
+        .map_err(|e| io("writing grub.cfg", e))?;
+
+    let iso = out.join("rustbox.iso");
+    let output = Command::new("grub-mkrescue")
+        .arg("-o")
+        .arg(&iso)
+        .arg(&staging)
+        .output()
+        .map_err(|e| format!("cannot run grub-mkrescue: {e} (install grub, xorriso and mtools)"))?;
+    // grub-mkrescue can exit 0 without writing anything when xorriso or
+    // mtools is missing, so check for the image itself.
+    if !output.status.success() || !iso.is_file() {
+        return Err(format!(
+            "grub-mkrescue failed (are xorriso and mtools installed?):\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    Ok(iso)
+}
+
+/// Xen logs to the screen and to COM1. GRUB hands Xen a framebuffer;
+/// `vga=current,keep` makes Xen draw its console there and keep doing so
+/// after dom0 starts. That matters because the kernel has no display driver:
+/// its messages reach the screen through Xen's console. (Asking Xen for VGA
+/// text mode instead leaves the screen blank when booted from GRUB.)
+fn grub_cfg() -> String {
+    format!(
+        "\
+set timeout=3
+set default=0
+
+if serial --unit=0 --speed=115200; then
+    terminal_input console serial
+    terminal_output console serial
+fi
+
+menuentry \"rustBOX (Xen + rustBOX kernel as PVH dom0)\" {{
+    multiboot2 /boot/xen {XEN_CMDLINE} console=vga,com1 vga=current,keep
+    module2 /boot/rustbox-kernel rbx.boot=iso
+}}
+"
+    )
+}
+
+fn test_iso(iso: &Path, opts: &Opts) -> Result<(), String> {
+    let mut cmd = qemu();
+    xen_machine(&mut cmd);
+    cmd.arg("-cdrom").arg(iso);
+    let log = boot_and_wait(cmd, Duration::from_secs(opts.timeout.unwrap_or(240)))?;
+    expect(&log, XEN_BOOT_LOG)?;
+    expect(&log, &["cmdline: rbx.boot=iso"])?;
+    println!("test-iso: ok ({})", iso.display());
+    Ok(())
+}
+
+/// Boots the ISO in a QEMU window (Xen's console is on the emulated screen
+/// and mirrored to this terminal). Close the window to stop.
+fn run_iso(iso: &Path) -> Result<(), String> {
+    let mut cmd =
+        Command::new(std::env::var_os("QEMU").unwrap_or_else(|| "qemu-system-x86_64".into()));
+    cmd.args(["-no-reboot", "-serial", "stdio"]);
+    xen_machine(&mut cmd);
+    cmd.arg("-cdrom").arg(iso);
+    let status = cmd.status().map_err(|e| format!("cannot run qemu: {e}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("qemu exited with {status}"))
+    }
 }
 
 /// Runs QEMU, echoing its serial output, until the kernel reports success,

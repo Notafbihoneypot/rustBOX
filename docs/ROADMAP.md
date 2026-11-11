@@ -9,6 +9,7 @@
 - [x] IDT and exception handling
 - [x] Memory map parsing and a physical frame allocator
 - [x] `cargo xtask test-boot` / `test-xen` boot tests
+- [x] Bootable ISO (GRUB, Xen, kernel as dom0) and `cargo xtask test-iso`
 - [x] System description, isolation policy, `xl` rendering, start order
 - [x] `rbx` CLI and a reference topology
 

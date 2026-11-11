@@ -63,7 +63,38 @@ frames: allocator ok (first frame 0x100000)
 rustbox: boot ok
 ```
 
-Working with a system description:
+### In a VM of your own
+
+`cargo xtask iso` builds a bootable CD image, `out/rustbox.iso`: GRUB loads
+Xen, Xen starts the rustBOX kernel as dom0. It needs `grub-mkrescue`
+(Debian/Ubuntu: `grub-pc-bin`, `grub-efi-amd64-bin`), `xorriso` and `mtools`.
+
+```sh
+cargo xtask iso --xen "$(scripts/fetch-xen.sh)"   # build out/rustbox.iso
+cargo xtask test-iso --xen ...                    # build, boot headless, check the log
+cargo xtask run-iso --xen ...                     # build and boot in a QEMU window
+```
+
+To boot the image by hand, this is the configuration the tests use. It needs
+no KVM, so it runs anywhere QEMU does:
+
+```sh
+qemu-system-x86_64 -machine q35 -cpu max,-npt -m 1G -device amd-iommu \
+    -cdrom out/rustbox.iso -serial stdio
+```
+
+The boot log appears on the VM's screen and on its first serial port, ending
+in `rustbox: boot ok`. Xen then reports that dom0 halted, which is expected:
+the kernel has nothing further to run yet.
+
+Other hypervisors (VirtualBox, VMware, Hyper-V, KVM with `-cpu host`) have
+not been tested. Xen needs two things from whatever runs it in order to start
+a PVH dom0: hardware virtualisation exposed to the guest (nested VT-x or
+AMD-V) and an emulated IOMMU. Without the second it stops with `iommu must be
+enabled for PVH hardware domain`.
+
+### Working with a system description
+
 
 ```sh
 cargo run -p rbx -- check config/rustbox.toml        # isolation policy
