@@ -1,0 +1,15 @@
+[workspace]
+resolver = "2"
+members = ["crates/xen-abi", "crates/kmem", "crates/rbx-core", "tools/rbx", "xtask"]
+# The kernel is a freestanding binary built for x86_64-unknown-none; it has its
+# own lockfile/target dir and is driven through `cargo xtask`.
+exclude = ["kernel"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+toml = "1"

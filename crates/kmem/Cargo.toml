@@ -1,0 +1,6 @@
+[package]
+name = "kmem"
+description = "Physical frame bookkeeping for the rustBOX kernel (no_std, host-testable)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true

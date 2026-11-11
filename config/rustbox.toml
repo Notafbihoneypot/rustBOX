@@ -1,0 +1,132 @@
+# rustBOX reference system.
+#
+# This is the default qube topology. The PCI addresses are examples: run
+# `rbx devices` on the target machine and substitute its own. Check any edit
+# with `rbx check config/rustbox.toml`.
+#
+#            +------------------------- Xen -------------------------+
+#            |  dom0        no devices, no network, no applications  |
+#            |  sys-net     network cards                            |
+#            |  sys-firewall   filters everything below it           |
+#            |  sys-usb     USB controllers                          |
+#            |  sys-gui     GPU + Wayland compositor                 |
+#            |  work, vault application qubes                        |
+#            |  byo         HVM installed from your own ISO          |
+#            |  gpu-hvm     HVM with a second GPU passed through     |
+#            +-------------------------------------------------------+
+
+[system]
+name = "rustbox"
+guivm = "sys-gui"
+
+# --- control domain ---------------------------------------------------------
+
+[[qube]]
+name = "dom0"
+role = "dom0"
+memory_mb = 1024
+vcpus = 2
+
+# --- service qubes: each owns one class of hardware ---------------------------
+
+[[qube]]
+name = "sys-net"
+role = "net"
+memory_mb = 512
+autostart = true
+pci = [
+    { bdf = "0000:00:1f.6", class = "nic" }, # wired
+    { bdf = "0000:02:00.0", class = "nic" }, # wireless
+]
+disks = [{ path = "/var/lib/rbx/qubes/sys-net/root.img" }]
+
+[[qube]]
+name = "sys-firewall"
+role = "firewall"
+memory_mb = 256
+autostart = true
+netvm = "sys-net"
+kernel = "/var/lib/rbx/kernels/service/vmlinuz"
+ramdisk = "/var/lib/rbx/kernels/service/initrd"
+cmdline = "root=/dev/xvda ro"
+disks = [{ path = "/var/lib/rbx/qubes/sys-firewall/root.img", readonly = true }]
+
+[[qube]]
+name = "sys-usb"
+role = "usb"
+memory_mb = 512
+autostart = true
+pci = [{ bdf = "0000:00:14.0", class = "usb" }]
+disks = [{ path = "/var/lib/rbx/qubes/sys-usb/root.img" }]
+
+[[qube]]
+name = "sys-gui"
+role = "gui"
+memory_mb = 4096
+vcpus = 4
+autostart = true
+pci = [
+    { bdf = "0000:00:02.0", class = "gpu" },   # primary (integrated) GPU: drives the panel
+    { bdf = "0000:00:1f.3", class = "audio" },
+]
+disks = [{ path = "/var/lib/rbx/qubes/sys-gui/root.img" }]
+
+# --- application qubes ---------------------------------------------------------
+
+[[qube]]
+name = "work"
+role = "app"
+label = "blue"
+memory_mb = 4096
+vcpus = 2
+netvm = "sys-firewall"
+kernel = "/var/lib/rbx/kernels/app/vmlinuz"
+ramdisk = "/var/lib/rbx/kernels/app/initrd"
+cmdline = "root=/dev/xvda ro"
+disks = [
+    { path = "/var/lib/rbx/templates/base/root.img", readonly = true },
+    { path = "/var/lib/rbx/qubes/work/private.img" },
+]
+
+# No netvm: secrets live here and never see a network.
+[[qube]]
+name = "vault"
+role = "app"
+label = "black"
+memory_mb = 1024
+kernel = "/var/lib/rbx/kernels/app/vmlinuz"
+ramdisk = "/var/lib/rbx/kernels/app/initrd"
+cmdline = "root=/dev/xvda ro"
+disks = [
+    { path = "/var/lib/rbx/templates/base/root.img", readonly = true },
+    { path = "/var/lib/rbx/qubes/vault/private.img" },
+]
+
+# --- HVMs ------------------------------------------------------------------------
+
+# Bring your own ISO: drop any installer at `iso`, start the qube, install to
+# the disk. Remove the `iso` line afterwards to boot from disk.
+[[qube]]
+name = "byo"
+role = "standalone"
+label = "orange"
+memory_mb = 4096
+vcpus = 2
+netvm = "sys-firewall"
+iso = "/var/lib/rbx/iso/install.iso"
+disks = [{ path = "/var/lib/rbx/qubes/byo/disk.img" }]
+
+# A second (discrete) GPU and its HDMI audio function handed to one HVM. It
+# drives its own monitor, bypassing sys-gui entirely.
+[[qube]]
+name = "gpu-hvm"
+role = "standalone"
+label = "red"
+memory_mb = 16384
+vcpus = 8
+netvm = "sys-firewall"
+disks = [{ path = "/var/lib/rbx/qubes/gpu-hvm/disk.img" }]
+pci = [
+    { bdf = "0000:01:00.0", class = "gpu" },
+    { bdf = "0000:01:00.1", class = "audio" },
+]

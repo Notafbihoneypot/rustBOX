@@ -1,0 +1,7 @@
+[package]
+name = "xtask"
+description = "rustBOX build and boot-test driver (cargo xtask ...)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false

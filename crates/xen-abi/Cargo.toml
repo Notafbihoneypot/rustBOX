@@ -1,0 +1,6 @@
+[package]
+name = "xen-abi"
+description = "Xen public ABI definitions (x86_64 PVH/HVM) shared by the rustBOX kernel and toolstack"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true

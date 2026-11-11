@@ -1,0 +1,7 @@
+[build]
+target = "x86_64-unknown-none"
+
+[target.x86_64-unknown-none]
+# The image is linked at a fixed physical address and entered in 32-bit mode
+# with paging off, so it must not be position independent.
+rustflags = ["-C", "relocation-model=static"]

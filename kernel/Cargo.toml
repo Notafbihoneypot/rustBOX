@@ -1,0 +1,28 @@
+[package]
+name = "rustbox-kernel"
+description = "rustBOX microkernel: boots as a Xen PVH guest (dom0 or domU)"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+
+[[bin]]
+name = "rustbox-kernel"
+path = "src/main.rs"
+test = false
+bench = false
+
+[dependencies]
+xen-abi = { path = "../crates/xen-abi" }
+kmem = { path = "../crates/kmem" }
+
+[profile.dev]
+panic = "abort"
+opt-level = 1
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+debug = true
+
+# Standalone: not a member of the host workspace (different target).
+[workspace]

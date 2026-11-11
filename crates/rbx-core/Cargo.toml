@@ -1,0 +1,10 @@
+[package]
+name = "rbx-core"
+description = "rustBOX qube model: system topology, isolation policy checks and Xen domain config rendering"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde.workspace = true
+toml.workspace = true
